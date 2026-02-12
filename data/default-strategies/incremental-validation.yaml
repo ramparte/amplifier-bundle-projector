@@ -1,0 +1,17 @@
+name: incremental-validation
+description: >
+  Validate after every 3 modified files. Never accumulate 7+ changed files
+  without running type checks, linting, and tests. Large batches of
+  unvalidated changes create expensive correction cycles where errors
+  compound and root causes become ambiguous.
+active: true
+scope: global
+enforcement: soft
+injection: |
+  After modifying 3 files, stop and validate. Run type checks (pyright),
+  linting (ruff), and tests on changed files before continuing. Never
+  accumulate 7+ changed files without validation. This is the 3-file rule.
+  It prevents expensive correction cycles where errors compound and root
+  causes become ambiguous. If you catch yourself about to modify a 4th
+  file without validating, stop and run checks first.
+tags: [quality, validation, incremental, discipline]

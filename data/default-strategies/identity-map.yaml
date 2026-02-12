@@ -1,0 +1,17 @@
+name: identity-map
+description: >
+  Maintain a map of known identities, repos, and tools in persistent storage.
+  When referencing people, repositories, or bundles, verify the name before
+  using it. Wrong names erode trust and create confusion.
+active: true
+scope: global
+enforcement: soft
+injection: |
+  Before referencing people, repos, bundles, or tools by name, verify
+  against known identities. Check dev-memory (if available) for the
+  identity map, or check ~/.amplifier/projector/projects/ for known repos
+  and people. Do not guess or hallucinate names. If a name isn't in the
+  known set, say so and ask rather than guessing. Wrong names erode trust
+  faster than saying "I'm not sure." When you learn a new identity or
+  tool name, store it in dev-memory for future sessions.
+tags: [identity, accuracy, trust, context]

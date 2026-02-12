@@ -1,0 +1,21 @@
+name: subagent-first
+description: >
+  Preserve main session context by delegating exploration to sub-agents.
+  When understanding code across multiple files, the main session should never
+  burn context on raw file reads. Sub-agents absorb that cost and return
+  concise summaries.
+active: true
+scope: global
+enforcement: soft
+injection: |
+  When exploring or understanding code involving more than 2 files, always
+  delegate to explorer or code-intel sub-agents. Never read multiple files
+  directly in the main session. Sub-agents absorb context cost and return
+  summaries (~500 tokens vs ~20,000 tokens of raw file content). This is
+  not an optimization - it is the primary operating mode for preserving
+  session longevity and effectiveness.
+  IMPORTANT: This applies to the ROOT session only. Sub-agents themselves
+  should do the actual work directly (read files, run tools, write code).
+  A sub-agent that delegates to further sub-agents instead of working is
+  an anti-pattern. The rule is: orchestrator delegates, workers work.
+tags: [context-management, delegation, session-health]

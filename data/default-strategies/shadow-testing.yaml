@@ -1,0 +1,21 @@
+name: shadow-testing
+description: >
+  Use shadow environments for isolation whenever the local environment could
+  influence results or be disrupted by testing. This includes cross-repo
+  dependency verification, clean-install testing, and context isolation.
+active: true
+scope: global
+enforcement: soft
+injection: |
+  Use shadow environments (shadow-operator) when any of these apply:
+  1. Changes touch repos that other repos depend on (cross-repo verification)
+  2. You need to test from a clean install (e.g. verifying the TUI works
+     for a new user, testing pip/uv install flows)
+  3. The local environment could influence results (cached state, local
+     config, installed packages that mask missing dependencies)
+  4. Testing could disrupt the local environment (destructive operations,
+     conflicting package versions)
+  5. You need to isolate context (verify behavior without local overrides)
+  Use amplifier-smoke-test to validate after creating the shadow. If shadow
+  testing is relevant but wasn't performed, say so explicitly.
+tags: [testing, isolation, safety, verification, clean-install]

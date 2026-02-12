@@ -1,0 +1,12 @@
+bundle:
+  name: projector-policy
+  version: 0.1.0
+  description: Strategy injection and session outcome capture hooks
+
+hooks:
+  - module: hooks-projector
+    source: git+https://github.com/ramparte/amplifier-bundle-projector@main#subdirectory=modules/hooks-projector
+    config:
+      strategies_path: ~/.amplifier/projector/strategies/
+      projects_path: ~/.amplifier/projector/projects/
+      session_filter: root_only

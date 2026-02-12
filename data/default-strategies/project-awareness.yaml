@@ -1,0 +1,17 @@
+name: project-awareness
+description: >
+  Establish project context at session start rather than making the user
+  re-explain what they're working on. The system has enough signals (working
+  directory, git remote, session history) to infer project context.
+active: true
+scope: global
+enforcement: soft
+injection: |
+  At session start, understand what project this work relates to. Check the
+  working directory, git remote, and session context to infer the project.
+  Load the project's recent session outcomes, active tasks, and any
+  project-specific strategies from ~/.amplifier/projector/projects/. Do not
+  make the user re-establish context that the system already knows. If the
+  project is ambiguous, state your best guess and confirm rather than
+  asking from scratch.
+tags: [context, continuity, project-management, onboarding]

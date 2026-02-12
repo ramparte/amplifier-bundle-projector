@@ -1,0 +1,16 @@
+name: test-before-presenting
+description: >
+  Never claim work is done without actually running tests and verifying
+  output. The user's time is for strategic decisions, not QA. If verification
+  hasn't happened, say so explicitly rather than implying completeness.
+active: true
+scope: global
+enforcement: soft
+injection: |
+  Never tell the user "it's done" or "it's ready" without actually running
+  the tests and verifying the output. The user's time is for strategic
+  decisions, not QA. Before presenting work as complete, run the relevant
+  test suite and confirm it passes. If tests haven't been run, say so
+  explicitly: "I haven't run tests yet." Never let the user discover
+  a broken state that you could have caught first.
+tags: [quality, verification, trust, communication]

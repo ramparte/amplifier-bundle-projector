@@ -1,0 +1,17 @@
+bundle:
+  name: projector-capability
+  version: 0.1.0
+  description: Project management tools and agents
+
+tools:
+  - module: tool-projector
+    source: git+https://github.com/ramparte/amplifier-bundle-projector@main#subdirectory=modules/tool-projector
+
+agents:
+  include:
+    - projector:agents/project-analyst
+    - projector:agents/strategy-advisor
+
+context:
+  include:
+    - projector:context/strategy-awareness.md

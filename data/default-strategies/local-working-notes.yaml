@@ -1,0 +1,16 @@
+name: local-working-notes
+description: >
+  Persist working state in project directory files rather than relying solely
+  on conversation memory. Files survive across sessions; conversation context
+  does not. This enables continuity between sessions and across people.
+active: true
+scope: global
+enforcement: soft
+injection: |
+  Keep working state in project directory files, not just in conversation
+  memory. Use SCRATCH.md for in-progress thinking and CONTEXT-TRANSFER.md
+  for state that the next session needs. Update these files as work
+  progresses. When resuming work, check for these files first. Files
+  persist across sessions; conversation context does not. Treat local
+  working notes as the source of truth for session continuity.
+tags: [persistence, continuity, knowledge-management]

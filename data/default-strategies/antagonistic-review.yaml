@@ -1,0 +1,19 @@
+name: antagonistic-review
+description: >
+  After substantial or complex work, spawn a fresh review session with no
+  shared context to audit the output. A builder's self-report is inherently
+  biased by the context accumulated during building. An independent reviewer
+  catches what the builder normalizes.
+active: true
+scope: global
+enforcement: soft
+injection: |
+  After substantial or complex sessions, spawn a fresh review session with
+  no shared context to audit the work. The reviewer should independently
+  verify: do tests actually pass? Is the code doing what it claims? Are
+  there gaps or regressions? Trust the reviewer's findings over the
+  builder's self-report. Use session-analyst to pull context from the
+  build session's transcript, then deliberate-reviewer or a self-delegate
+  with context_depth "none" to perform the review. The reviewer should
+  have evidence from session-analyst but no inherited assumptions.
+tags: [quality, review, verification, trust]
