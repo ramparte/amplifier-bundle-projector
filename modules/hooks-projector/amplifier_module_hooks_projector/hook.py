@@ -281,7 +281,7 @@ class ProjectorHook:
             return HookResult(action="continue")
 
         if context:
-            return HookResult(action="inject_context", value=context)
+            return HookResult(action="inject_context", context_injection=context)
         return HookResult(action="continue")
 
     async def on_session_end(self, event: str, event_data: dict) -> HookResult:
