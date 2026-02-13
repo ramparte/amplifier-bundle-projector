@@ -269,7 +269,7 @@ class ProjectorHook:
 
     # -- event handlers -------------------------------------------------
 
-    async def on_session_start(self, event_data: dict) -> HookResult:
+    async def on_session_start(self, event: str, event_data: dict) -> HookResult:
         """Inject strategies and project context into a starting session."""
         if not self._is_root_session(event_data):
             return HookResult(action="continue")
@@ -284,7 +284,7 @@ class ProjectorHook:
             return HookResult(action="inject_context", value=context)
         return HookResult(action="continue")
 
-    async def on_session_end(self, event_data: dict) -> HookResult:
+    async def on_session_end(self, event: str, event_data: dict) -> HookResult:
         """Capture a best-effort session outcome to the project log.
 
         Intentionally simple -- records what we can determine from session

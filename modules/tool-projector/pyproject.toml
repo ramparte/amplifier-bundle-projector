@@ -3,7 +3,7 @@ name = "amplifier-module-tool-projector"
 version = "0.1.0"
 description = "Project management and strategy tool for Amplifier Projector"
 requires-python = ">=3.11"
-dependencies = ["pyyaml>=6.0"]
+dependencies = ["pyyaml>=6.0", "amplifier-core"]
 
 [project.entry-points."amplifier.modules"]
 tool-projector = "amplifier_module_tool_projector:mount"

@@ -14,6 +14,8 @@ from typing import Any
 
 import yaml
 
+from amplifier_core import ToolResult
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -136,7 +138,7 @@ class ProjectorTool:
     )
 
     @property
-    def parameters(self) -> dict[str, Any]:
+    def input_schema(self) -> dict[str, Any]:
         """JSON Schema describing the tool's input."""
         return {
             "type": "object",
@@ -183,29 +185,25 @@ class ProjectorTool:
 
     # -- Execute (dispatch) -----------------------------------------------------
 
-    async def execute(
-        self,
-        *,
-        arguments: dict[str, Any],
-        context: dict[str, Any] | None = None,
-    ) -> str:
+    async def execute(self, input: dict[str, Any]) -> ToolResult:
         """Dispatch to the appropriate operation handler."""
-        op = arguments.get("operation")
+        op = input.get("operation")
         if not op:
-            return _err("Missing required parameter: operation")
+            return ToolResult(success=False, error={"message": "Missing required parameter: operation"})
         if op not in OPERATIONS:
-            return _err(f"Unknown operation: {op!r}. Valid: {', '.join(OPERATIONS)}")
+            return ToolResult(success=False, error={"message": f"Unknown operation: {op!r}. Valid: {', '.join(OPERATIONS)}"})
 
         handler = getattr(self, f"_op_{op}", None)
         if handler is None:  # pragma: no cover
-            return _err(f"Operation {op!r} is not implemented")
+            return ToolResult(success=False, error={"message": f"Operation {op!r} is not implemented"})
 
         try:
-            return handler(arguments)
+            result = handler(input)
+            return ToolResult(success=True, output=result)
         except ValueError as exc:
-            return _err(str(exc))
+            return ToolResult(success=False, error={"message": str(exc)})
         except Exception as exc:
-            return _err(f"Unexpected error in {op}: {exc}")
+            return ToolResult(success=False, error={"message": f"Unexpected error in {op}: {exc}"})
 
     # ===================================================================
     # PROJECT operations
