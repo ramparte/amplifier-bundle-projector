@@ -91,7 +91,7 @@ class ProjectorHook:
 
             name: str
             active: bool
-            injection_text: str
+            injection: str
         """
         strategies: list[dict] = []
         if not self.strategies_path.is_dir():
@@ -101,7 +101,7 @@ class ProjectorHook:
             if not self._is_safe_path(path, self.strategies_path):
                 continue
             data = self._read_yaml(path)
-            if data.get("active") and data.get("injection_text"):
+            if data.get("active") and data.get("injection"):
                 strategies.append(data)
 
         return strategies
@@ -214,7 +214,7 @@ class ProjectorHook:
             lines = ["## Active Strategies", ""]
             for strat in strategies:
                 name = strat.get("name", "Unnamed")
-                text = strat["injection_text"].strip()
+                text = strat["injection"].strip()
                 lines.append(f"### {name}")
                 lines.append(text)
                 lines.append("")
