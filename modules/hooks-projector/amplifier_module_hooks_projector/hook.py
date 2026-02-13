@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def mount(coordinator: Any, config: dict) -> None:
+async def mount(coordinator: Any, config: dict) -> None:
     """Mount projector hooks onto the coordinator."""
     hook = ProjectorHook(config)
     coordinator.hooks.register("session:start", hook.on_session_start, priority=50)
