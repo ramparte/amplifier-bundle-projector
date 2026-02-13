@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 async def mount(coordinator: Any, config: dict) -> None:
     """Mount projector hooks onto the coordinator."""
-    hook = ProjectorHook(config)
+    hook = ProjectorHook(config, coordinator=coordinator)
     coordinator.hooks.register("session:start", hook.on_session_start, priority=50)
     coordinator.hooks.register("session:end", hook.on_session_end, priority=50)
 
@@ -42,7 +42,8 @@ async def mount(coordinator: Any, config: dict) -> None:
 class ProjectorHook:
     """Injects project context on start, captures outcomes on end."""
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, coordinator: Any = None) -> None:
+        self._coordinator = coordinator
         self.strategies_path: Path = Path(
             config.get("strategies_path", "~/.amplifier/projector/strategies")
         ).expanduser()
@@ -270,7 +271,13 @@ class ProjectorHook:
     # -- event handlers -------------------------------------------------
 
     async def on_session_start(self, event: str, event_data: dict) -> HookResult:
-        """Inject strategies and project context into a starting session."""
+        """Inject strategies and project context into a starting session.
+
+        Note: The kernel does not call coordinator.process_hook_result() for
+        session:start events, so inject_context HookResults are silently
+        dropped.  We work around this by calling process_hook_result()
+        directly on the coordinator.
+        """
         if not self._is_root_session(event_data):
             return HookResult(action="continue")
 
@@ -280,8 +287,13 @@ class ProjectorHook:
             logger.warning("Projector hook: context build failed", exc_info=True)
             return HookResult(action="continue")
 
-        if context:
-            return HookResult(action="inject_context", context_injection=context)
+        if context and self._coordinator is not None:
+            result = HookResult(action="inject_context", context_injection=context)
+            try:
+                await self._coordinator.process_hook_result(result, event, hook_name="hooks-projector")
+            except Exception:
+                logger.warning("Projector hook: direct context injection failed", exc_info=True)
+
         return HookResult(action="continue")
 
     async def on_session_end(self, event: str, event_data: dict) -> HookResult:
