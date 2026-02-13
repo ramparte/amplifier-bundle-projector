@@ -1,10 +1,13 @@
 """Projector hook implementation.
 
-Registers session:start and session:end hooks that bridge the Projector
-system (strategies, projects, outcomes) into live Amplifier sessions.
+Registers hooks that bridge the Projector system (strategies, projects,
+outcomes) into live Amplifier sessions.
 
-session:start  - Injects active strategies + detected project context.
-session:end    - Captures a best-effort outcome summary to the project log.
+provider:request - Injects active strategies + detected project context
+                   as ephemeral user-role content right before each LLM call.
+                   This places strategies at the highest-attention position
+                   (matches the hooks-status-context pattern).
+session:end      - Captures a best-effort outcome summary to the project log.
 """
 
 from __future__ import annotations
@@ -29,9 +32,25 @@ logger = logging.getLogger(__name__)
 
 async def mount(coordinator: Any, config: dict) -> None:
     """Mount projector hooks onto the coordinator."""
+    # Resolve working_dir from session capability (same pattern as hooks-status-context)
+    if "working_dir" not in config:
+        working_dir = coordinator.get_capability("session.working_dir")
+        if working_dir:
+            config = {**config, "working_dir": working_dir}
+
     hook = ProjectorHook(config, coordinator=coordinator)
-    coordinator.hooks.register("session:start", hook.on_session_start, priority=50)
-    coordinator.hooks.register("session:end", hook.on_session_end, priority=50)
+    coordinator.hooks.register(
+        "provider:request",
+        hook.on_provider_request,
+        priority=50,
+        name="hooks-projector",
+    )
+    coordinator.hooks.register(
+        "session:end",
+        hook.on_session_end,
+        priority=50,
+        name="hooks-projector-end",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +59,7 @@ async def mount(coordinator: Any, config: dict) -> None:
 
 
 class ProjectorHook:
-    """Injects project context on start, captures outcomes on end."""
+    """Injects project context on provider:request, captures outcomes on end."""
 
     def __init__(self, config: dict, coordinator: Any = None) -> None:
         self._coordinator = coordinator
@@ -53,6 +72,13 @@ class ProjectorHook:
         self.session_filter: str = config.get("session_filter", "root_only")
         self.max_recent_outcomes: int = int(config.get("max_recent_outcomes", 5))
 
+        # Working directory - resolved once at mount time from session capability
+        self._working_dir: str = config.get("working_dir", "")
+
+        # Cache: built once on first provider:request, reused for the session.
+        # Strategies and project context don't change mid-session.
+        self._cached_injection: str | None = None
+
     # -- helpers: safety ------------------------------------------------
 
     def _is_safe_path(self, path: Path, root: Path) -> bool:
@@ -63,11 +89,17 @@ class ProjectorHook:
         except ValueError:
             return False
 
-    def _is_root_session(self, event_data: dict) -> bool:
-        """Return True when this event belongs to a root session."""
+    def _is_root_session(self) -> bool:
+        """Return True when this session is a root session (not a sub-agent)."""
         if self.session_filter != "root_only":
             return True
-        return not event_data.get("parent_session_id")
+        if self._coordinator is None:
+            return True
+        try:
+            parent_id = self._coordinator.parent_id
+            return parent_id is None
+        except AttributeError:
+            return True
 
     # -- helpers: YAML file loading ------------------------------------
 
@@ -138,6 +170,8 @@ class ProjectorHook:
         1. Git remote URL matched against project ``repos`` list.
         2. Directory-name heuristic against repo slugs.
         """
+        if not working_dir:
+            return None
         resolved = Path(working_dir).resolve()
         projects = self._load_all_projects()
 
@@ -205,8 +239,8 @@ class ProjectorHook:
 
     # -- context building -----------------------------------------------
 
-    def _build_context(self, event_data: dict) -> str:
-        """Assemble the full injection text for session:start."""
+    def _build_context(self) -> str:
+        """Assemble the full injection text from strategies + project state."""
         sections: list[str] = []
 
         # --- active strategies ---
@@ -221,9 +255,8 @@ class ProjectorHook:
                 lines.append("")
             sections.append("\n".join(lines))
 
-        # --- project context ---
-        working_dir = event_data.get("working_dir", "")
-        project = self._detect_project(working_dir) if working_dir else None
+        # --- project context (using working_dir from session capability) ---
+        project = self._detect_project(self._working_dir)
 
         if project:
             project_dir: Path = project["_dir"]
@@ -270,31 +303,41 @@ class ProjectorHook:
 
     # -- event handlers -------------------------------------------------
 
-    async def on_session_start(self, event: str, event_data: dict) -> HookResult:
-        """Inject strategies and project context into a starting session.
+    async def on_provider_request(self, event: str, data: dict) -> HookResult:
+        """Inject strategies and project context before each LLM call.
 
-        Note: The kernel does not call coordinator.process_hook_result() for
-        session:start events, so inject_context HookResults are silently
-        dropped.  We work around this by calling process_hook_result()
-        directly on the coordinator.
+        Uses ephemeral=True so content is injected fresh each request
+        (highest-attention position) without accumulating in stored context.
+        Matches the hooks-status-context pattern.
         """
-        if not self._is_root_session(event_data):
+        if not self._is_root_session():
             return HookResult(action="continue")
 
-        try:
-            context = self._build_context(event_data)
-        except Exception:
-            logger.warning("Projector hook: context build failed", exc_info=True)
-            return HookResult(action="continue")
-
-        if context and self._coordinator is not None:
-            result = HookResult(action="inject_context", context_injection=context)
+        # Build once, cache for the session
+        if self._cached_injection is None:
             try:
-                await self._coordinator.process_hook_result(result, event, hook_name="hooks-projector")
+                context = self._build_context()
             except Exception:
-                logger.warning("Projector hook: direct context injection failed", exc_info=True)
+                logger.warning("Projector hook: context build failed", exc_info=True)
+                context = ""
+            self._cached_injection = context
 
-        return HookResult(action="continue")
+        if not self._cached_injection:
+            return HookResult(action="continue")
+
+        injection = (
+            '<system-reminder source="hooks-projector">\n'
+            f"{self._cached_injection}\n"
+            "</system-reminder>"
+        )
+
+        return HookResult(
+            action="inject_context",
+            context_injection=injection,
+            context_injection_role="user",
+            ephemeral=True,
+            suppress_output=True,
+        )
 
     async def on_session_end(self, event: str, event_data: dict) -> HookResult:
         """Capture a best-effort session outcome to the project log.
@@ -303,7 +346,7 @@ class ProjectorHook:
         metadata alone.  A richer LLM-based summariser can be layered on
         later.
         """
-        if not self._is_root_session(event_data):
+        if not self._is_root_session():
             return HookResult(action="continue")
 
         try:
@@ -317,8 +360,14 @@ class ProjectorHook:
     # -- outcome capture ------------------------------------------------
 
     def _capture_outcome(self, event_data: dict) -> None:
-        """Write an outcome record to the project's ``outcomes.jsonl``."""
-        working_dir = event_data.get("working_dir", "")
+        """Write an outcome record to the project's ``outcomes.jsonl``.
+
+        Uses self._working_dir (resolved from session.working_dir capability
+        at mount time) instead of relying on event_data which may not
+        contain working_dir.
+        """
+        # Try event_data first, fall back to the session capability we stored
+        working_dir = event_data.get("working_dir", "") or self._working_dir
         project = self._detect_project(working_dir) if working_dir else None
         if project is None:
             return
@@ -330,12 +379,22 @@ class ProjectorHook:
         summary = event_data.get("summary", "")
         if not summary:
             summary = self._derive_summary(event_data)
+
+        # Also try to get session_id from coordinator if not in event_data
+        session_id = event_data.get("session_id", "")
+        if not session_id and self._coordinator is not None:
+            try:
+                session_id = self._coordinator.session_id or ""
+            except AttributeError:
+                pass
+
+        # Build a description from whatever we have even if summary is empty
         if not summary:
-            return
+            summary = f"Session {session_id[:8]}..." if session_id else "(no summary)"
 
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "session_id": event_data.get("session_id", ""),
+            "session_id": session_id,
             "project": project.get("slug", project.get("name", "")),
             "summary": summary,
             "tasks_completed": event_data.get("tasks_completed", []),
