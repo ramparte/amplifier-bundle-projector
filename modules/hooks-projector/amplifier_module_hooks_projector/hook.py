@@ -23,6 +23,8 @@ import yaml
 
 from amplifier_core.hooks import HookResult
 
+import asyncio
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -339,18 +341,125 @@ class ProjectorHook:
             suppress_output=True,
         )
 
-    async def on_session_end(self, event: str, event_data: dict) -> HookResult:
-        """Capture a best-effort session outcome to the project log.
+    async def _summarize_with_llm(self, messages_text: str) -> str | None:
+        """Call the fastest available LLM to summarize a session transcript.
 
-        Intentionally simple -- records what we can determine from session
-        metadata alone.  A richer LLM-based summariser can be layered on
-        later.
+        Uses whatever provider is mounted — provider-agnostic.
+        Keeps prompt small and response short for speed.
+        Returns None on any failure (caller falls back to metadata summary).
+        """
+        if not self._coordinator:
+            return None
+
+        try:
+            providers = self._coordinator.get("providers")
+            if not providers:
+                return None
+
+            provider = next(iter(providers.values()), None)
+            if not provider:
+                return None
+
+            from amplifier_core import ChatRequest, Message
+
+            prompt = (
+                "Summarize this AI assistant session in 2-3 sentences. "
+                "Focus on: what was accomplished, what's still pending, "
+                "and any key decisions made. Be specific (name files, features, bugs). "
+                "Do NOT include greetings or meta-commentary.\n\n"
+                f"SESSION TRANSCRIPT (last messages):\n{messages_text}"
+            )
+
+            request = ChatRequest(
+                messages=[Message(role="user", content=prompt)],
+            )
+
+            response = await asyncio.wait_for(
+                provider.complete(request),
+                timeout=15.0,
+            )
+
+            if response and response.content:
+                text_parts = []
+                for block in response.content:
+                    if hasattr(block, "text"):
+                        text_parts.append(block.text)
+                    elif hasattr(block, "content") and isinstance(block.content, str):
+                        text_parts.append(block.content)
+                result = "".join(text_parts).strip()
+                return result if result else None
+
+        except asyncio.TimeoutError:
+            logger.debug("Projector hook: LLM summary timed out (15s)")
+        except Exception:
+            logger.debug("Projector hook: LLM summary failed", exc_info=True)
+
+        return None
+
+    async def _get_transcript_text(self, max_messages: int = 30) -> str:
+        """Extract recent conversation text from the session context module.
+
+        Returns a compact string of the last N user/assistant messages.
+        Truncates individual messages to 500 chars to keep prompt small.
+        """
+        try:
+            context = None
+            if hasattr(self._coordinator, "mount_points"):
+                context = self._coordinator.mount_points.get("context")
+            if context is None:
+                context = self._coordinator.get("context")
+            if context is None or not hasattr(context, "get_messages"):
+                return ""
+
+            messages = await context.get_messages()
+            if not messages:
+                return ""
+
+            # Filter to user/assistant, take last N
+            relevant = [
+                m for m in messages
+                if hasattr(m, "role") and m.role in ("user", "assistant")
+            ][-max_messages:]
+
+            lines = []
+            for m in relevant:
+                content = ""
+                if hasattr(m, "content"):
+                    if isinstance(m.content, str):
+                        content = m.content
+                    elif isinstance(m.content, list):
+                        # Content blocks — extract text
+                        parts = []
+                        for block in m.content:
+                            if hasattr(block, "text"):
+                                parts.append(block.text)
+                            elif isinstance(block, str):
+                                parts.append(block)
+                        content = " ".join(parts)
+
+                # Truncate long messages
+                if len(content) > 500:
+                    content = content[:500] + "..."
+
+                lines.append(f"[{m.role}]: {content}")
+
+            return "\n".join(lines)
+
+        except Exception:
+            logger.debug("Projector hook: transcript extraction failed", exc_info=True)
+            return ""
+
+    async def on_session_end(self, event: str, event_data: dict) -> HookResult:
+        """Capture a session outcome with LLM-generated summary to the project log.
+
+        Uses the mounted provider to summarize the conversation transcript.
+        Falls back to metadata-only summary if LLM is unavailable or times out.
         """
         if not self._is_root_session():
             return HookResult(action="continue")
 
         try:
-            self._capture_outcome(event_data)
+            await self._capture_outcome(event_data)
         except Exception:
             # Never let outcome capture crash a session.
             logger.debug("Projector hook: outcome capture failed", exc_info=True)
@@ -359,12 +468,11 @@ class ProjectorHook:
 
     # -- outcome capture ------------------------------------------------
 
-    def _capture_outcome(self, event_data: dict) -> None:
+    async def _capture_outcome(self, event_data: dict) -> None:
         """Write an outcome record to the project's ``outcomes.jsonl``.
 
-        Uses self._working_dir (resolved from session.working_dir capability
-        at mount time) instead of relying on event_data which may not
-        contain working_dir.
+        Uses LLM to generate a meaningful summary from the conversation
+        transcript. Falls back to metadata-only summary if LLM unavailable.
         """
         # Try event_data first, fall back to the session capability we stored
         working_dir = event_data.get("working_dir", "") or self._working_dir
@@ -376,11 +484,7 @@ class ProjectorHook:
         if not self._is_safe_path(project_dir, self.projects_path):
             return
 
-        summary = event_data.get("summary", "")
-        if not summary:
-            summary = self._derive_summary(event_data)
-
-        # Also try to get session_id from coordinator if not in event_data
+        # Get session_id
         session_id = event_data.get("session_id", "")
         if not session_id and self._coordinator is not None:
             try:
@@ -388,7 +492,17 @@ class ProjectorHook:
             except AttributeError:
                 pass
 
-        # Build a description from whatever we have even if summary is empty
+        # Try LLM summarization first
+        summary = None
+        transcript_text = await self._get_transcript_text(max_messages=30)
+        if transcript_text:
+            summary = await self._summarize_with_llm(transcript_text)
+
+        # Fall back to metadata summary
+        if not summary:
+            summary = event_data.get("summary", "")
+        if not summary:
+            summary = self._derive_summary(event_data)
         if not summary:
             summary = f"Session {session_id[:8]}..." if session_id else "(no summary)"
 
@@ -399,6 +513,7 @@ class ProjectorHook:
             "summary": summary,
             "tasks_completed": event_data.get("tasks_completed", []),
             "tasks_created": event_data.get("tasks_created", []),
+            "working_dir": working_dir,
         }
 
         outcomes_file = project_dir / "outcomes.jsonl"
