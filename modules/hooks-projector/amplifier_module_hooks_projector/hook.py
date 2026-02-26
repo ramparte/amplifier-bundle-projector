@@ -352,8 +352,17 @@ class ProjectorHook:
             return None
 
         try:
-            providers = self._coordinator.get("providers")
+            # Use mount_points directly (canonical amplifier-core pattern).
+            # coordinator.get("providers") returns {} which is falsy even when
+            # providers exist, and may raise on non-standard coordinators.
+            providers = {}
+            if hasattr(self._coordinator, "mount_points"):
+                providers = self._coordinator.mount_points.get("providers", {})
             if not providers:
+                logger.debug(
+                    "Projector hook: no providers at summary time "
+                    "(may be unmounted during teardown)"
+                )
                 return None
 
             provider = next(iter(providers.values()), None)
@@ -417,7 +426,8 @@ class ProjectorHook:
 
             # Filter to user/assistant, take last N
             relevant = [
-                m for m in messages
+                m
+                for m in messages
                 if hasattr(m, "role") and m.role in ("user", "assistant")
             ][-max_messages:]
 
@@ -468,6 +478,90 @@ class ProjectorHook:
 
     # -- outcome capture ------------------------------------------------
 
+    def _auto_register_project(self, working_dir: str) -> dict | None:
+        """Auto-create a minimal project entry for an unrecognized working dir.
+
+        Derives the project slug from the directory name and creates a
+        ``project.yaml`` so future sessions are tracked automatically.
+        Returns the project dict (same shape as ``_load_all_projects`` entries)
+        or None if auto-registration isn't possible.
+        """
+        resolved = Path(working_dir).resolve()
+        slug = resolved.name
+        if not slug or slug in (".", "/", "~"):
+            return None
+
+        # Don't auto-register for home dir, tmp, or root-level dirs
+        parts = resolved.parts
+        if len(parts) <= 3:  # e.g. /home/user or /tmp
+            return None
+
+        project_dir = self.projects_path / slug
+        project_yaml = project_dir / "project.yaml"
+
+        # Don't overwrite if dir exists but project.yaml is missing
+        # (the batch migration case) — create the yaml
+        if project_yaml.is_file():
+            return None  # Already exists, _detect_project should have found it
+
+        try:
+            # Derive git remote for repos field
+            repos = []
+            try:
+                result = subprocess.run(
+                    ["git", "-C", str(resolved), "remote", "get-url", "origin"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode == 0:
+                    url = result.stdout.strip()
+                    # Extract org/repo from git URL
+                    for pattern in [
+                        r"github\.com[:/](.+?)(?:\.git)?$",
+                    ]:
+                        import re
+
+                        match = re.search(pattern, url)
+                        if match:
+                            repos.append(match.group(1))
+                            break
+            except Exception:
+                pass
+
+            project_data = {
+                "name": slug,
+                "description": f"Auto-registered from {resolved}",
+                "status": "active",
+                "repos": repos or [slug],
+                "people": [],
+                "tags": ["auto-registered"],
+            }
+
+            project_dir.mkdir(parents=True, exist_ok=True)
+            project_yaml.write_text(
+                yaml.dump(project_data, default_flow_style=False, sort_keys=False),
+                encoding="utf-8",
+            )
+            logger.info(
+                "Projector hook: auto-registered project '%s' from %s",
+                slug,
+                resolved,
+            )
+
+            # Return in the same shape as _load_all_projects entries
+            project_data["slug"] = slug
+            project_data["_dir"] = project_dir
+            return project_data
+
+        except Exception:
+            logger.debug(
+                "Projector hook: auto-registration failed for %s",
+                slug,
+                exc_info=True,
+            )
+            return None
+
     async def _capture_outcome(self, event_data: dict) -> None:
         """Write an outcome record to the project's ``outcomes.jsonl``.
 
@@ -477,6 +571,11 @@ class ProjectorHook:
         # Try event_data first, fall back to the session capability we stored
         working_dir = event_data.get("working_dir", "") or self._working_dir
         project = self._detect_project(working_dir) if working_dir else None
+
+        # Auto-register unknown projects so no session is silently dropped
+        if project is None and working_dir:
+            project = self._auto_register_project(working_dir)
+
         if project is None:
             return
 
